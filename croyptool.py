@@ -14,10 +14,20 @@ usage: croyptool.py <source images dir> <cropped images dir>
 
 for squaring use imagick convert:
 
-for i in *.jpg; do convert $i  -resize 1024x1024 ../1/$i; done
-for i in *.jpg; do convert $i  -gravity center -background white -extent 1024x1024 ../2/$i; done
+for i in *.jpg; do convert $i  -quality 100% -resize 1024x1024 ../1024/$i; done
+for i in *.jpg; do convert $i  -quality 100% -gravity center -background white -extent 1024x1024 ../1024px/$i; done
+
+for squaring the tops:
+
+for i in *.jpg; do convert -crop $(identify -format "%w" $i)x$(identify -format "%w" $i)+0+0 +repage $i  ../c/$i; done
+then resize
+
+TODO:
+    save CSV for training the TF OD model
 
 '''
+
+screen_res = 850, 480
 
 # Read the graph.
 with tf.gfile.FastGFile('frozen_inference_graph_faces.pb', 'rb') as f:
@@ -45,15 +55,27 @@ with tf.Session() as sess:
                         sess.graph.get_tensor_by_name('detection_classes:0')],
                        feed_dict={'image_tensor:0': inp.reshape(1, inp.shape[0], inp.shape[1], 3)})
 
-        # Visualize detected bounding boxes.
         num_detections = int(out[0][0])
-        print("num_detections",num_detections)
-        #rimg = cv.resize(img,(int(cols/2),int(rows/2)))
+        highscore = 0
+        for i in range(num_detections):
+            score = float(out[1][0][i])
+            if score > highscore:
+                highscore = score
+
+        print(file, "num_detections",num_detections,"highest score",highscore)
         rimg = cv.imread(file)
+
+        # prepare data for adjusting to the screen resulation
+        scale_width = screen_res[0] / img.shape[1]
+        scale_height = screen_res[1] / img.shape[0]
+        scale = min(scale_width, scale_height)
+
         for i in range(num_detections):
             classId = int(out[3][0][i])
             score = float(out[1][0][i])
             bbox = [float(v) for v in out[2][0][i]]
+
+            # adjust this for better hit/miss. default is 0.5
             if score > 0.5:
                 print("good score:",score,"for file",file)
                 x = int(bbox[1] * cols )
@@ -66,7 +88,9 @@ with tf.Session() as sess:
                 f_height = bottom - y
                 print ("aspect ratio is 1 to", f_height / f_width)
 
+                # adjust these to prefer faces with specific aspect ratio (vertical/horizontal)
                 if f_height / f_width > 1 and f_height / f_width < 1.6:
+
                     # adjust these parameters to modify dimensions of crop box
                     crop_x = int(x - f_width * 1.0) # 1.5 for moar squared
                     crop_y = int(y - f_height * 0.5)
@@ -76,8 +100,15 @@ with tf.Session() as sess:
                     rimg = cv.rectangle(  rimg,   (x, y), (right, bottom), (125, 255, 51), thickness=2)
                     rimg = cv.rectangle(  rimg,   (crop_x, crop_y), (crop_right, crop_bottom), (255, 255, 0), thickness=2)
 
-                    cv.imshow('croyptool', rimg)
+                    #resized window width and height
+                    window_width = int(img.shape[1] * scale)
+                    window_height = int(img.shape[0] * scale)
+                    cv.namedWindow('croyptool', cv.WINDOW_NORMAL)
                     cv.moveWindow('croyptool', 0, 0)
+                    #resize the window according to the screen resolution
+                    cv.resizeWindow('croyptool', window_width, window_height)
+                    cv.imshow('croyptool', rimg)
+
                     k = cv.waitKey()
                     if k == ord('q'):
                         sys.exit()
@@ -90,7 +121,8 @@ with tf.Session() as sess:
                             crop_x = 0
                         if crop_y < 0:
                             crop_y = 0
-                        print('saving to',sys.argv[2] + '/' + os.path.basename(file), ":", crop_y,crop_bottom,crop_x,crop_right)
+                        # was: " crop:", crop_y,crop_bottom,crop_x,crop_right,
+                        print(file, 'saving to',sys.argv[2] + '/' + os.path.basename(file), " crop:", crop_x,crop_y,crop_right,crop_bottom, "face:", x,y,right,bottom)
                         crop_img = img[crop_y:crop_bottom, crop_x:crop_right]
                         cv.imwrite(sys.argv[2] + '/cropped' + os.path.basename(file), crop_img)
 
